@@ -22,40 +22,40 @@ jobs:
           # Remove any existing rule with the same name to avoid duplication
           netsh advfirewall firewall delete rule name="RDP-Tailscale"
 
-          # For testing, allow any incoming connection on port 3389
+          # Allow incoming connection on port 3389 (RDP)
           netsh advfirewall firewall add rule name="RDP-Tailscale" `
             dir=in action=allow protocol=TCP localport=3389
 
-          # (Optional) Restart the Remote Desktop service to ensure changes take effect
+          # Restart Remote Desktop service
           Restart-Service -Name TermService -Force
 
       - name: Create RDP User with Fixed Password
         shell: powershell
         run: |
-          # Create user "Alone" with password "Aone1122"
-          $plainPassword = 'Aone1122'
+          $username = "Alone"
+          $plainPassword = "Aone1122"
           $securePass = ConvertTo-SecureString $plainPassword -AsPlainText -Force
 
-          if (-not (Get-LocalUser -Name 'Alone' -ErrorAction SilentlyContinue)) {
-              New-LocalUser -Name "Alone" -Password $securePass -AccountNeverExpires -Description "RDP user"
-          } else {
-              Write-Host "Local user 'Alone' already exists. Setting password to the provided value."
-              # reset the password if user exists
-              $user = Get-LocalUser -Name 'Alone'
-              $user | Set-LocalUser -Password $securePass
+          # Delete existing user if any
+          if (Get-LocalUser -Name $username -ErrorAction SilentlyContinue) {
+              Write-Host "Removing existing user $username..."
+              Remove-LocalUser -Name $username -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 2
           }
 
-          # Add to groups
-          Add-LocalGroupMember -Group "Administrators" -Member "Alone"
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "Alone"
+          # Create user using 'net user' (works better on GitHub Windows runners)
+          Write-Host "Creating user $username..."
+          net user $username $plainPassword /add
+          net localgroup administrators $username /add
+          net localgroup "Remote Desktop Users" $username /add
 
-          # Export credentials to environment for later steps
-          echo "RDP_CREDS=User: Alone | Password: $plainPassword" >> $env:GITHUB_ENV
-
-          if (-not (Get-LocalUser -Name "Alone")) {
+          # Verify account creation
+          if (-not (Get-LocalUser -Name $username)) {
               Write-Error "User creation failed"
               exit 1
           }
+
+          echo "RDP_CREDS=User: $username | Password: $plainPassword" >> $env:GITHUB_ENV
 
       - name: Install Tailscale
         run: |
@@ -68,7 +68,7 @@ jobs:
 
       - name: Establish Tailscale Connection
         run: |
-          # Bring up Tailscale with the provided auth key and set a unique hostname
+          # Bring up Tailscale with your auth key and unique hostname
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
 
           # Wait for Tailscale to assign an IP
@@ -84,13 +84,12 @@ jobs:
               Write-Error "Tailscale IP not assigned. Exiting."
               exit 1
           }
+
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
       - name: Verify RDP Accessibility
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-
-          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
           if (-not $testResult.TcpTestSucceeded) {
               Write-Error "TCP connection to RDP port 3389 failed"
@@ -103,11 +102,11 @@ jobs:
           Write-Host "`n=== RDP ACCESS ==="
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: Alone"
-          Write-Host "Password: $env:RDP_CREDS"
+          Write-Host "Password: Aone1122"
           Write-Host "==================`n"
 
-          # Keep runner active indefinitely (or until manually cancelled)
+          # Keep the session alive indefinitely
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Write-Host "[$(Get-Date)] RDP Active - press Ctrl+C to terminate"
               Start-Sleep -Seconds 300
           }
